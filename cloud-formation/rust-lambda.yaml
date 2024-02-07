@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  BucketName:
+    Type: String
+    Description: The name of the S3 bucket where the Lambda deployment package is located
+    Default: your-bucket-name
+  PathToLambdaZip:
+    Type: String
+    Description: The path to the Lambda deployment package in the S3 bucket
+    Default: path/to/lambda.zip
+Resources:
+  RustLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: provided.al2
+      Code:
+        S3Bucket: !Ref BucketName
+        S3Key: !Ref PathToLambdaZip
+      MemorySize: 128
+      Timeout: 15
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: LambdaExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 'logs:*'
+                Resource: 'arn:aws:logs:*:*:*'
+
+  MyApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: RustServiceAPI
+
+  Resource:
+    Type: AWS::ApiGateway::Resource
+    DependsOn: MyApi
+    Properties:
+      RestApiId: !Ref MyApi
+      ParentId: !GetAtt 'MyApi.RootResourceId'
+      PathPart: rustservice
+
+  Method:
+    Type: AWS::ApiGateway::Method
+    DependsOn: Resource
+    Properties:
+      RestApiId: !Ref MyApi
+      ResourceId: !Ref Resource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RustLambdaFunction.Arn}/invocations'
+      MethodResponses: []
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RustLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${MyApi}/*/*/*'
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: Method
+    Properties:
+      RestApiId: !Ref MyApi
+      StageName: Dev
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL for the Rust service"
+    Value: !Sub "https://${MyApi}.execute-api.${AWS::Region}.amazonaws.com/Dev/rustservice"
